@@ -104,3 +104,56 @@ def test_stop_is_idempotent(client):
 
     assert response.status_code == 200
     assert response.json() == {"running": False}
+
+
+def test_sensor_fault_stops_running_pump(client):
+    """A simulated sensor failure forces a running pump to stop."""
+    client.post("/speed/120")
+    client.post("/start")
+
+    response = client.post("/simulation/sensor/disconnect")
+
+    assert response.status_code == 200
+    assert response.json() == {"sensor_connected": False, "running": False}
+    assert client.get("/status").json() == {
+        "speed": 120,
+        "running": False,
+        "sensor_connected": False,
+    }
+
+
+def test_sensor_fault_blocks_pump_start(client):
+    """Starting the pump during a sensor fault returns HTTP 409."""
+    client.post("/speed/120")
+    client.post("/simulation/sensor/disconnect")
+
+    response = client.post("/start")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Sensor disconnected"}
+    assert client.get("/status").json()["running"] is False
+
+
+def test_sensor_reconnection_does_not_restart_pump(client):
+    """Recovering a sensor must not automatically reactivate the pump."""
+    client.post("/speed/120")
+    client.post("/start")
+    client.post("/simulation/sensor/disconnect")
+
+    response = client.post("/simulation/sensor/reconnect")
+
+    assert response.status_code == 200
+    assert response.json() == {"sensor_connected": True, "running": False}
+    assert client.get("/status").json()["running"] is False
+
+
+def test_pump_can_restart_after_sensor_recovery(client):
+    """An explicit start request succeeds after sensor reconnection."""
+    client.post("/speed/120")
+    client.post("/simulation/sensor/disconnect")
+    client.post("/simulation/sensor/reconnect")
+
+    response = client.post("/start")
+
+    assert response.status_code == 200
+    assert client.get("/status").json()["running"] is True

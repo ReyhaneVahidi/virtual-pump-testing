@@ -47,6 +47,21 @@ def create_app() -> FastAPI:
         pump.stop()
         return {"running": pump.running}
 
+    @app.post("/simulation/sensor/disconnect")
+    def disconnect_sensor():
+        """Simulate a sensor failure that immediately stops the pump.
+
+        This is a fault-injection endpoint for the virtual simulator only.
+        """
+        pump.disconnect_sensor()
+        return {"sensor_connected": pump.sensor_connected, "running": pump.running}
+
+    @app.post("/simulation/sensor/reconnect")
+    def reconnect_sensor():
+        """Restore the simulated sensor without restarting the pump."""
+        pump.reconnect_sensor()
+        return {"sensor_connected": pump.sensor_connected, "running": pump.running}
+
     return app
 
 
