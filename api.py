@@ -16,11 +16,12 @@ def create_app() -> FastAPI:
 
     @app.get("/status")
     def get_status():
-        """Return the current pump speed, running state, and sensor status."""
+        """Return the pump configuration, operating state, and active faults."""
         return {
             "speed": pump.speed,
             "running": pump.running,
             "sensor_connected": pump.sensor_connected,
+            "motor_fault_active": pump.motor_fault_active,
         }
 
     @app.post("/speed/{rpm}")
@@ -61,6 +62,18 @@ def create_app() -> FastAPI:
         """Restore the simulated sensor without restarting the pump."""
         pump.reconnect_sensor()
         return {"sensor_connected": pump.sensor_connected, "running": pump.running}
+
+    @app.post("/simulation/motor/fail")
+    def fail_motor():
+        """Inject a simulated motor failure and stop the pump immediately."""
+        pump.fail_motor()
+        return {"motor_fault_active": pump.motor_fault_active, "running": pump.running}
+
+    @app.post("/simulation/motor/reset")
+    def reset_motor_fault():
+        """Clear the motor failure without automatically starting the pump."""
+        pump.reset_motor_fault()
+        return {"motor_fault_active": pump.motor_fault_active, "running": pump.running}
 
     return app
 
