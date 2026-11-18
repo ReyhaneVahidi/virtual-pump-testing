@@ -24,9 +24,11 @@ def test_status_reports_initial_state(client):
     assert response.status_code == 200
     assert response.json() == {
         "speed": 0,
+        "measured_rpm": 0.0,
         "running": False,
         "sensor_connected": True,
         "motor_fault_active": False,
+        "feedback_fault_code": None,
     }
 
 
@@ -118,9 +120,11 @@ def test_sensor_fault_stops_running_pump(client):
     assert response.json() == {"sensor_connected": False, "running": False}
     assert client.get("/status").json() == {
         "speed": 120,
+        "measured_rpm": None,
         "running": False,
         "sensor_connected": False,
         "motor_fault_active": False,
+        "feedback_fault_code": None,
     }
 
 
@@ -172,9 +176,11 @@ def test_motor_fault_stops_running_pump(client):
     assert response.json() == {"motor_fault_active": True, "running": False}
     assert client.get("/status").json() == {
         "speed": 120,
+        "measured_rpm": 0.0,
         "running": False,
         "sensor_connected": True,
         "motor_fault_active": True,
+        "feedback_fault_code": None,
     }
 
 
@@ -258,3 +264,146 @@ def test_repeated_motor_fault_and_reset_requests_are_safe(client):
 
     assert failure_again.json() == {"motor_fault_active": True, "running": False}
     assert reset_again.json() == {"motor_fault_active": False, "running": False}
+
+
+def test_status_shows_commanded_and_measured_speed(client):
+    """Status distinguishes requested speed from simulated feedback."""
+    client.post("/speed/150")
+    client.post("/start")
+
+    status = client.get("/status").json()
+    assert status["speed"] == 150
+    assert status["measured_rpm"] == 150.0
+    assert status["feedback_fault_code"] is None
+
+
+@pytest.mark.parametrize("reading", [120, 150, 180])
+def test_normal_feedback_keeps_pump_running(client, reading):
+    """Readings within the 20% tolerance preserve normal operation."""
+    client.post("/speed/150")
+    client.post("/start")
+
+    response = client.post("/simulation/feedback", json={"measured_rpm": reading})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "measured_rpm": float(reading), "fault_code": None, "running": True
+    }
+
+
+@pytest.mark.parametrize(
+    ("reading", "code"),
+    [(0, "BLOCKED"), (119, "UNDERSPEED"), (181, "OVERSPEED")],
+)
+def test_feedback_faults_stop_pump_through_api(client, reading, code):
+    """HTTP feedback injection reports the detected fault and stops the pump."""
+    client.post("/speed/150")
+    client.post("/start")
+
+    response = client.post("/simulation/feedback", json={"measured_rpm": reading})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "measured_rpm": float(reading), "fault_code": code, "running": False
+    }
+    assert client.get("/status").json()["feedback_fault_code"] == code
+
+
+@pytest.mark.parametrize("payload", [
+    {"measured_rpm": -1},
+    {"measured_rpm": 1001},
+    {"measured_rpm": "invalid"},
+    {},
+])
+def test_bad_feedback_payload_returns_validation_error(client, payload):
+    """Invalid JSON input is rejected before it reaches the pump model."""
+    client.post("/speed/150")
+    client.post("/start")
+
+    response = client.post("/simulation/feedback", json=payload)
+
+    assert response.status_code == 422
+    assert client.get("/status").json()["running"] is True
+
+
+def test_feedback_while_stopped_returns_conflict(client):
+    """Measurements are only accepted during a simulated running cycle."""
+    response = client.post("/simulation/feedback", json={"measured_rpm": 100})
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Pump is not running"}
+
+
+def test_api_requires_reset_after_feedback_fault(client):
+    """Fault recovery requires a reset followed by an explicit start."""
+    client.post("/speed/150")
+    client.post("/start")
+    client.post("/simulation/feedback", json={"measured_rpm": 0})
+
+    rejected = client.post("/start")
+    assert rejected.status_code == 409
+    assert rejected.json() == {"detail": "Feedback fault active"}
+
+    reset = client.post("/simulation/feedback/reset")
+    assert reset.status_code == 200
+    assert reset.json() == {"feedback_fault_code": None, "running": False}
+
+    assert client.post("/start").json()["running"] is True
+
+
+def test_motor_fault_still_blocks_start_after_feedback_reset(client):
+    """Independent interlocks remain active after RPM fault recovery."""
+    client.post("/speed/150")
+    client.post("/start")
+    client.post("/simulation/feedback", json={"measured_rpm": 0})
+    client.post("/simulation/motor/fail")
+    client.post("/simulation/feedback/reset")
+
+    assert client.post("/start").json() == {"detail": "Motor fault active"}
+    client.post("/simulation/motor/reset")
+    assert client.post("/start").status_code == 200
+
+
+def test_events_endpoint_includes_fault_code_and_utc_timestamp(client):
+    """HTTP clients can retrieve timestamped and structured fault events."""
+    from datetime import datetime, timezone
+
+    client.post("/speed/150")
+    client.post("/start")
+    client.post("/simulation/feedback", json={"measured_rpm": 0})
+
+    response = client.get("/events")
+    assert response.status_code == 200
+    events = response.json()["events"]
+    assert response.json()["total"] == 4
+    assert [entry["id"] for entry in events] == [1, 2, 3, 4]
+    assert events[-1]["type"] == "feedback_fault_detected"
+    assert events[-1]["details"]["fault_code"] == "BLOCKED"
+    assert datetime.fromisoformat(events[-1]["timestamp_utc"].replace("Z", "+00:00")).tzinfo == timezone.utc
+
+
+def test_events_endpoint_limits_history(client):
+    """The API returns only the requested number of latest events."""
+    client.post("/speed/100")
+    client.post("/start")
+    client.post("/stop")
+
+    response = client.get("/events?limit=2")
+    assert response.status_code == 200
+    assert response.json()["total"] == 3
+    assert [event["type"] for event in response.json()["events"]] == [
+        "pump_started", "pump_stopped"
+    ]
+
+
+@pytest.mark.parametrize("limit", ["0", "1001", "abc"])
+def test_events_endpoint_rejects_invalid_limits(client, limit):
+    """Query validation prevents unreasonable or malformed log requests."""
+    assert client.get(f"/events?limit={limit}").status_code == 422
+
+
+def test_event_histories_are_isolated_between_app_instances():
+    """Tests using separate API instances cannot leak log or pump state."""
+    with TestClient(create_app()) as first, TestClient(create_app()) as second:
+        first.post("/speed/100")
+        assert first.get("/events").json()["total"] == 1
+        assert second.get("/events").json()["total"] == 0

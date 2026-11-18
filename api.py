@@ -1,32 +1,45 @@
-"""HTTP API for controlling the simulated laboratory pump.
+"""FastAPI endpoints for a virtual pump and its fault-injection scenarios.
 
-The application uses one in-memory Pump instance per FastAPI application.
-Calling create_app() allows tests to start with a fresh pump state.
+Each application instance owns one in-memory Pump. Factory-created instances
+keep tests isolated; a server restart resets the simulated state and events.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from pump import Pump
 
 
+class FeedbackInput(BaseModel):
+    """Validate an explicitly simulated RPM feedback measurement."""
+
+    measured_rpm: float = Field(ge=0, le=1000, allow_inf_nan=False)
+
+
 def create_app() -> FastAPI:
-    """Create a pump API with an independent simulated pump instance."""
-    app = FastAPI(title="Virtual Pump API")
+    """Create the API with an independent pump instance for each app."""
+    app = FastAPI(
+        title="Virtual Laboratory Pump API",
+        description="Software-only pump control, fault injection and test logging.",
+        version="1.0.0",
+    )
     pump = Pump()
 
     @app.get("/status")
     def get_status():
-        """Return the pump configuration, operating state, and active faults."""
+        """Return current commanded speed, last feedback and fault states."""
         return {
             "speed": pump.speed,
+            "measured_rpm": pump.measured_rpm,
             "running": pump.running,
             "sensor_connected": pump.sensor_connected,
             "motor_fault_active": pump.motor_fault_active,
+            "feedback_fault_code": pump.feedback_fault_code,
         }
 
     @app.post("/speed/{rpm}")
     def set_speed(rpm: int):
-        """Set speed in RPM, or return HTTP 400 for an unsupported value."""
+        """Set commanded RPM; reject out-of-range values with HTTP 400."""
         try:
             pump.set_speed(rpm)
         except ValueError as exc:
@@ -35,7 +48,7 @@ def create_app() -> FastAPI:
 
     @app.post("/start")
     def start():
-        """Start the pump, or return HTTP 409 if prerequisites are unmet."""
+        """Start the virtual pump unless a safety interlock prevents it."""
         try:
             pump.start()
         except RuntimeError as exc:
@@ -50,33 +63,55 @@ def create_app() -> FastAPI:
 
     @app.post("/simulation/sensor/disconnect")
     def disconnect_sensor():
-        """Simulate a sensor failure that immediately stops the pump.
-
-        This is a fault-injection endpoint for the virtual simulator only.
-        """
+        """Simulate a disconnected feedback sensor and stop operation."""
         pump.disconnect_sensor()
         return {"sensor_connected": pump.sensor_connected, "running": pump.running}
 
     @app.post("/simulation/sensor/reconnect")
     def reconnect_sensor():
-        """Restore the simulated sensor without restarting the pump."""
+        """Re-establish the sensor without restarting the pump."""
         pump.reconnect_sensor()
         return {"sensor_connected": pump.sensor_connected, "running": pump.running}
 
     @app.post("/simulation/motor/fail")
     def fail_motor():
-        """Inject a simulated motor failure and stop the pump immediately."""
+        """Inject a latched motor fault and force a stop."""
         pump.fail_motor()
         return {"motor_fault_active": pump.motor_fault_active, "running": pump.running}
 
     @app.post("/simulation/motor/reset")
     def reset_motor_fault():
-        """Clear the motor failure without automatically starting the pump."""
+        """Reset the motor fault without restarting the pump."""
         pump.reset_motor_fault()
         return {"motor_fault_active": pump.motor_fault_active, "running": pump.running}
+
+    @app.post("/simulation/feedback")
+    def simulate_feedback(payload: FeedbackInput):
+        """Evaluate a simulated measurement and latch any detected fault."""
+        try:
+            fault_code = pump.update_feedback(payload.measured_rpm)
+        except (ValueError, RuntimeError) as exc:
+            status_code = 400 if isinstance(exc, ValueError) else 409
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        return {
+            "measured_rpm": pump.measured_rpm,
+            "fault_code": fault_code,
+            "running": pump.running,
+        }
+
+    @app.post("/simulation/feedback/reset")
+    def reset_feedback_fault():
+        """Clear a detected RPM fault; an explicit start is still required."""
+        pump.reset_feedback_fault()
+        return {"feedback_fault_code": pump.feedback_fault_code, "running": pump.running}
+
+    @app.get("/events")
+    def get_events(limit: int = Query(default=100, ge=1, le=1000)):
+        """Read recent timestamped events, oldest first within the limit."""
+        return {"events": pump.list_events(limit=limit), "total": pump.event_count}
 
     return app
 
 
-# ASGI entry point for: uvicorn api:app --reload
+# ASGI entry point: python -m uvicorn api:app --reload
 app = create_app()
