@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "description": "Selected requirements-based acceptance cases mapped to existing pytest functions. Parameterized functions count as multiple test executions.",
+  "cases": [
+    {
+      "id": "TC-001",
+      "requirement": "REQ-001",
+      "title": "Accept valid speed setpoints",
+      "selectors": [
+        "tests/test_pump.py::test_accepts_speed_at_valid_limits",
+        "tests/test_api.py::test_set_speed_accepts_valid_values"
+      ]
+    },
+    {
+      "id": "TC-002",
+      "requirement": "REQ-001",
+      "title": "Reject invalid speed without modifying setpoint",
+      "selectors": [
+        "tests/test_pump.py::test_rejects_speed_outside_valid_range",
+        "tests/test_api.py::test_set_speed_rejects_out_of_range_values",
+        "tests/test_api.py::test_invalid_speed_preserves_previous_setting",
+        "tests/test_api.py::test_non_integer_speed_returns_validation_error"
+      ]
+    },
+    {
+      "id": "TC-003",
+      "requirement": "REQ-002",
+      "title": "Start only with a configured speed",
+      "selectors": [
+        "tests/test_pump.py::test_cannot_start_without_speed",
+        "tests/test_api.py::test_start_without_speed_returns_conflict",
+        "tests/test_pump.py::test_pump_starts_when_speed_is_set",
+        "tests/test_api.py::test_start_with_valid_speed"
+      ]
+    },
+    {
+      "id": "TC-004",
+      "requirement": "REQ-003",
+      "title": "Stop command and idempotent stop",
+      "selectors": [
+        "tests/test_pump.py::test_pump_stops",
+        "tests/test_api.py::test_stop_running_pump",
+        "tests/test_api.py::test_stop_is_idempotent"
+      ]
+    },
+    {
+      "id": "TC-005",
+      "requirement": "REQ-004",
+      "title": "Sensor disconnection forces safe stop and blocks start",
+      "selectors": [
+        "tests/test_pump.py::test_sensor_disconnection_stops_pump",
+        "tests/test_pump.py::test_cannot_start_with_disconnected_sensor",
+        "tests/test_api.py::test_sensor_fault_stops_running_pump",
+        "tests/test_api.py::test_sensor_fault_blocks_pump_start"
+      ]
+    },
+    {
+      "id": "TC-006",
+      "requirement": "REQ-004",
+      "title": "Sensor recovery requires explicit restart",
+      "selectors": [
+        "tests/test_pump.py::test_pump_can_restart_after_sensor_reconnection",
+        "tests/test_api.py::test_sensor_reconnection_does_not_restart_pump",
+        "tests/test_api.py::test_pump_can_restart_after_sensor_recovery"
+      ]
+    },
+    {
+      "id": "TC-007",
+      "requirement": "REQ-005",
+      "title": "Motor fault stop, latching, and reset interlocks",
+      "selectors": [
+        "tests/test_pump.py::test_motor_fault_stops_running_pump",
+        "tests/test_api.py::test_motor_fault_stops_running_pump",
+        "tests/test_api.py::test_motor_fault_blocks_start",
+        "tests/test_pump.py::test_resetting_motor_fault_does_not_restart_pump",
+        "tests/test_api.py::test_motor_fault_recovery_requires_explicit_start",
+        "tests/test_api.py::test_both_faults_must_be_cleared_before_restart"
+      ]
+    },
+    {
+      "id": "TC-008",
+      "requirement": "REQ-006",
+      "title": "RPM feedback thresholds and latched fault handling",
+      "selectors": [
+        "tests/test_pump.py::test_feedback_within_inclusive_tolerance_does_not_stop_pump",
+        "tests/test_pump.py::test_abnormal_feedback_latches_fault_and_stops_pump",
+        "tests/test_api.py::test_feedback_faults_stop_pump_through_api",
+        "tests/test_pump.py::test_feedback_fault_requires_explicit_reset_and_restart"
+      ]
+    },
+    {
+      "id": "TC-009",
+      "requirement": "REQ-007",
+      "title": "Traceable UTC event history for feedback faults",
+      "selectors": [
+        "tests/test_pump.py::test_event_log_records_timestamp_and_order",
+        "tests/test_api.py::test_events_endpoint_includes_fault_code_and_utc_timestamp",
+        "tests/test_api.py::test_events_endpoint_limits_history"
+      ]
+    },
+    {
+      "id": "TC-010",
+      "requirement": "REQ-008",
+      "title": "API reports current operating and fault status",
+      "selectors": [
+        "tests/test_api.py::test_status_reports_initial_state",
+        "tests/test_api.py::test_status_shows_commanded_and_measured_speed",
+        "tests/test_api.py::test_sensor_fault_stops_running_pump",
+        "tests/test_api.py::test_motor_fault_stops_running_pump"
+      ]
+    }
+  ]
+}
